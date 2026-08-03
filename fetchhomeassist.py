@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+from datetime import datetime, timezone
 import shutil
 import logging
 
 import paramiko
 import pandas as pd
+from sqlalchemy import create_engine, text
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -21,11 +23,20 @@ PG_PW = "homeassist"
 
 REMOTE_DIR = "/share/export"
 
-INCOMING = Path("/opt/homeassist/incoming")
-ARCHIVE = Path("/opt/homeassist/archive")
+BASE_DIR = Path("/opt/homeassist")
 
-INCOMING.mkdir(parents=True, exist_ok=True)
-ARCHIVE.mkdir(parents=True, exist_ok=True)
+INCOMING_DIR = BASE_DIR / "incoming"
+ARCHIVE_DIR = BASE_DIR / "archive"
+
+INCOMING_DIR.mkdir(parents=True, exist_ok=True)
+ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_URL = (
+    "postgresql+psycopg2://"
+    "{PG_USER}:{PG_PW}@{PG_HOST}/homeassist"
+)
+
+# -----------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,10 +44,19 @@ logging.basicConfig(
 )
 
 
+engine = create_engine(
+    DB_URL,
+    pool_pre_ping=True
+)
+
+
+# -----------------------------------------------------------------------------
+# Download from Home Assistant
 # -----------------------------------------------------------------------------
 
-def download_missing_files():
+def download_files():
 
+    logging.info("Connecting to Home Assistant")
     transport = paramiko.Transport((SSH_HOST, 22))
     transport.connect(
         username=SSH_USER,
@@ -44,25 +64,26 @@ def download_missing_files():
     )
 
     sftp = paramiko.SFTPClient.from_transport(transport)
-
     downloaded = []
 
-    for entry in sftp.listdir_attr(REMOTE_DIR):
+    for file in sftp.listdir(REMOTE_DIR):
 
-        if not entry.filename.startswith("statistics"):
+        if not file.startswith("statistics"):
+            logging.info("%s skipped, not statistics",file)
             continue
 
-        local = INCOMING / entry.filename
+        if not file.endswith(".parquet"):
+            logging.info("%s skipped, not PARQUET",file)
+            continue
 
+        local = INCOMING_DIR / file
         if local.exists():
+            logging.info("%s already downloaded",file)
             continue
 
-        remote = f"{REMOTE_DIR}/{entry.filename}"
+        logging.info("Downloading %s", file)
 
-        logging.info("Downloading %s", entry.filename)
-
-        sftp.get(remote, str(local))
-
+        sftp.get(f"{REMOTE_DIR}/{file}", str(local))
         downloaded.append(local)
 
     sftp.close()
@@ -72,53 +93,140 @@ def download_missing_files():
 
 
 # -----------------------------------------------------------------------------
+# Import
+# -----------------------------------------------------------------------------
+
+def already_imported(filename):
+    sql = "SELECT 1 FROM import_log WHERE filename = :filename"
+    with engine.connect() as conn:
+        return conn.execute(
+            text(sql),
+            {"filename": filename}
+        ).first() is not None
 
 def import_parquet(file: Path):
-
     logging.info("Importing %s", file.name)
+
+    if already_imported(file.name):
+        logging.info("%s already imported",file.name)
+        return False
 
     df = pd.read_parquet(file)
 
-    #
-    # TODO:
-    #
-    # insert into PostgreSQL
-    #
-    # ON CONFLICT DO NOTHING
-    #
+    # -------------------------------------------------------------------------
+    # Convert timestamps
+    # -------------------------------------------------------------------------
 
-    logging.info("Imported %d rows", len(df))
+    if "start_ts" in df.columns:
+
+        df["start_at"] = pd.to_datetime(
+            df["start_ts"],
+            unit="s",
+            utc=True
+        )
 
 
+    if "created_ts" in df.columns:
+
+        df["created_at"] = pd.to_datetime(
+            df["created_ts"],
+            unit="s",
+            utc=True
+        )
+
+
+    if "last_reset_ts" in df.columns:
+
+        df["last_reset_at"] = pd.to_datetime(
+            df["last_reset_ts"],
+            unit="s",
+            utc=True
+        )
+
+
+    # remove HA internal fields
+
+    drop_columns = [
+        "id",
+        "created",
+        "start",
+        "last_reset",
+        "start_ts",
+        "created_ts",
+        "last_reset_ts"
+    ]
+
+    df.drop(
+        columns=[
+            c for c in drop_columns
+            if c in df.columns
+        ],
+        inplace=True
+    )
+
+    rows = len(df)
+
+    try:
+        with engine.begin() as conn:
+            df.to_sql(
+                "statistics_short_term",
+                conn,
+                if_exists="append",
+                index=False,
+                method="multi",
+                chunksize=5000
+            )
+
+            conn.execute(
+                text("""
+                INSERT INTO import_log
+                (
+                    filename,
+                    rows_imported
+                )
+                VALUES
+                (
+                    :filename,
+                    :rows
+                )
+                """),
+                {
+                    "filename": file.name,
+                    "rows": rows
+                }
+            )
+
+        logging.info("Imported %s rows from %s", rows, file.name)
+        return True
+
+    except Exception:
+        logging.exception("Import failed: %s", file.name)
+        return False
+
+# -----------------------------------------------------------------------------
+# Main
 # -----------------------------------------------------------------------------
 
 def main():
 
-    download_missing_files()
+    logging.info(
+        "Starting Home Assistant archive import"
+    )
+
+    download_files()
 
     for file in sorted(INCOMING.glob("statistics*.parquet")):
-
         try:
-
-            import_parquet(file)
-
-            shutil.move(
-                file,
-                ARCHIVE / file.name
-            )
-
-            logging.info("Archived %s", file.name)
-
+            if import_parquet(file):
+                shutil.move(
+                    file,
+                    ARCHIVE_DIR / file.name
+                )
+                logging.info("Archived %s", file.name)
         except Exception:
+            logging.exception("Import failed for %s", file.name)
 
-            logging.exception(
-                "Import failed for %s",
-                file.name
-            )
-
-
-# -----------------------------------------------------------------------------
+    logging.info("Finished")
 
 if __name__ == "__main__":
-
     main()
