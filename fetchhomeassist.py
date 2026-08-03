@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import shutil
 import logging
-
+import os
 import paramiko
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -16,25 +16,20 @@ from sqlalchemy import create_engine, text
 SSH_HOST = "homeassistant"
 SSH_USER = "root"
 SSH_KEY = Path.home() / ".ssh/id_ed25519"
-
-PG_HOST = "localhost"
-PG_USER = "homeassist"
-PG_PW = "homeassist"
-
 REMOTE_DIR = "/share/export"
 
 BASE_DIR = Path("/opt/homeassist")
-
 INCOMING_DIR = BASE_DIR / "incoming"
 ARCHIVE_DIR = BASE_DIR / "archive"
 
 INCOMING_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_URL = (
-    "postgresql+psycopg2://"
-    "{PG_USER}:{PG_PW}@{PG_HOST}/homeassist"
-)
+PG_USER = os.environ.get("PG_USER", "homeassist")
+PG_HOST = os.environ.get("PG_HOST", "localhost")
+PG_PW = os.environ["PG_PW"]
+
+DB_URL = f"postgresql+psycopg2://{PG_USER}:{PG_PW}@{PG_HOST}/homeassist"
 
 # -----------------------------------------------------------------------------
 
@@ -46,7 +41,8 @@ logging.basicConfig(
 
 engine = create_engine(
     DB_URL,
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    echo=False
 )
 
 
@@ -97,7 +93,7 @@ def download_files():
 # -----------------------------------------------------------------------------
 
 def already_imported(filename):
-    sql = "SELECT 1 FROM import_log WHERE filename = :filename"
+    sql = "SELECT 1 FROM import_history WHERE filename = :filename"
     with engine.connect() as conn:
         return conn.execute(
             text(sql),
@@ -215,7 +211,7 @@ def main():
 
     download_files()
 
-    for file in sorted(INCOMING.glob("statistics*.parquet")):
+    for file in sorted(INCOMING_DIR.glob("statistics*.parquet")):
         try:
             if import_parquet(file):
                 shutil.move(
