@@ -215,7 +215,7 @@ def main():
 
     download_files()
 
-    for file in sorted(INCOMING.glob("statistics*.parquet")):
+    for file in sorted(INCOMING_DIR.glob("statistics*.parquet")):
         try:
             if import_parquet(file):
                 shutil.move(
