@@ -6,4 +6,5 @@
     python -m venv .venv
     source .venv/bin/activate
     pip install -r requirements.txt
-dsie
+
+    ./Homeassist-Archive/fetchhomeassist.py > import.log 2>&1
