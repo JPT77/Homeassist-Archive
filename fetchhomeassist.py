@@ -100,6 +100,55 @@ def already_imported(filename):
             {"filename": filename}
         ).first() is not None
 
+def get_or_create_meta(conn, row):
+    statistic_id = row["statistic_id"]
+
+    result = conn.execute(
+        text("""
+            SELECT id
+            FROM statistics_meta
+            WHERE statistic_id = :statistic_id
+        """),
+        {"statistic_id": statistic_id}
+    ).first()
+
+    if result:
+        return result.id
+
+    result = conn.execute(
+        text("""
+            INSERT INTO statistics_meta
+            (
+                statistic_id,
+                source,
+                unit_of_measurement,
+                has_mean,
+                has_sum,
+                name
+            )
+            VALUES
+            (
+                :statistic_id,
+                :source,
+                :unit_of_measurement,
+                :has_mean,
+                :has_sum,
+                :name
+            )
+            RETURNING id
+        """),
+        {
+            "statistic_id": statistic_id,
+            "source": row.get("source"),
+            "unit_of_measurement": row.get("unit_of_measurement"),
+            "has_mean": row.get("has_mean"),
+            "has_sum": row.get("has_sum"),
+            "name": row.get("name"),
+        }
+    ).first()
+
+    return result.id
+
 def import_parquet(file: Path):
     logging.info("Importing %s", file.name)
 
@@ -108,6 +157,11 @@ def import_parquet(file: Path):
         return False
 
     df = pd.read_parquet(file)
+
+    if "statistic_id" not in df.columns:
+        raise ValueError(
+            f"{file.name} enthält keine Spalte 'statistic_id'"
+        )
 
     # -------------------------------------------------------------------------
     # Convert timestamps
@@ -164,6 +218,62 @@ def import_parquet(file: Path):
 
     try:
         with engine.begin() as conn:
+
+            meta_ids = {}
+
+            for statistic_id, group in df.groupby("statistic_id"):
+                meta_ids[statistic_id] = get_or_create_meta(
+                    conn,
+                    group.iloc[0]
+                )
+
+                df["metadata_id"] = df["statistic_id"].map(meta_ids)
+
+            df["metadata_id"] = (
+                df["statistic_id"].map(meta_ids)
+            )
+
+            # Kontrolle: keine fehlenden Zuordnungen
+            if df["metadata_id"].isna().any():
+                missing = (
+                    df.loc[
+                        df["metadata_id"].isna(),
+                        "statistic_id"
+                    ]
+                    .unique()
+                    .tolist()
+                )
+
+                raise ValueError(
+                    f"Keine Meta-ID für statistic_id: {missing}"
+                )
+
+
+            drop_columns = [
+                "id",
+                "created",
+                "start",
+                "last_reset",
+
+                "created_ts",
+                "last_reset_ts",
+
+                # Diese Felder gehören zu statistics_meta
+                "source",
+                "unit_of_measurement",
+                "has_mean",
+                "has_sum",
+                "name",
+            ]
+
+            df.drop(
+                columns=[
+                    c for c in drop_columns
+                    if c in df.columns
+                ],
+                inplace=True
+            )
+
             df.to_sql(
                 "statistics_short_term",
                 conn,
