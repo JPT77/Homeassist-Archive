@@ -175,7 +175,7 @@ def import_parquet(file: Path):
 
             conn.execute(
                 text("""
-                INSERT INTO import_log
+                INSERT INTO import_history
                 (
                     filename,
                     rows_imported
