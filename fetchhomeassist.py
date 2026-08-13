@@ -38,13 +38,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s"
 )
 
-
 engine = create_engine(
     DB_URL,
     pool_pre_ping=True,
     echo=False
 )
-
 
 # -----------------------------------------------------------------------------
 # Download from Home Assistant
@@ -89,7 +87,7 @@ def download_files():
 
 
 # -----------------------------------------------------------------------------
-# Import
+# Has this file already been imported?
 # -----------------------------------------------------------------------------
 
 def already_imported(filename):
@@ -99,6 +97,10 @@ def already_imported(filename):
             text(sql),
             {"filename": filename}
         ).first() is not None
+
+# -----------------------------------------------------------------------------
+# Find meta record if exists, else create it.
+# -----------------------------------------------------------------------------
 
 def get_or_create_meta(conn, row):
     statistic_id = row["statistic_id"]
@@ -149,6 +151,37 @@ def get_or_create_meta(conn, row):
 
     return result.id
 
+# -----------------------------------------------------------------------------
+# convert the timstamp columns
+# -----------------------------------------------------------------------------
+def convert_timestamp(df, source_column, target_column, unit="s"):
+    if source_column in df.columns:
+        df[target_column] = pd.to_datetime(
+            df[source_column],
+            unit=unit,
+            utc=True
+        )
+
+    return df
+
+# -----------------------------------------------------------------------------
+# Main function for importing the parquet file, calling the above
+# -----------------------------------------------------------------------------
+def drop_columns(df, columns):
+    df.drop(
+        columns=[
+            column
+            for column in columns
+            if column in df.columns
+        ],
+        inplace=True
+    )
+
+    return df
+
+# -----------------------------------------------------------------------------
+# Main function for importing the parquet file, calling the above
+# -----------------------------------------------------------------------------
 def import_parquet(file: Path):
     logging.info("Importing %s", file.name)
 
@@ -163,55 +196,19 @@ def import_parquet(file: Path):
             f"{file.name} enthält keine Spalte 'statistic_id'"
         )
 
-    # -------------------------------------------------------------------------
-    # Convert timestamps
-    # -------------------------------------------------------------------------
+    df = convert_timestamp(df, "start_ts", "start_at")
+    df = convert_timestamp(df, "created_ts", "created_at")
+    df = convert_timestamp(df, "last_reset_ts", "last_reset_at")
 
-    if "start_ts" in df.columns:
-
-        df["start_at"] = pd.to_datetime(
-            df["start_ts"],
-            unit="s",
-            utc=True
-        )
-
-
-    if "created_ts" in df.columns:
-
-        df["created_at"] = pd.to_datetime(
-            df["created_ts"],
-            unit="s",
-            utc=True
-        )
-
-
-    if "last_reset_ts" in df.columns:
-
-        df["last_reset_at"] = pd.to_datetime(
-            df["last_reset_ts"],
-            unit="s",
-            utc=True
-        )
-
-
-    # remove HA internal fields
-
-    drop_columns = [
-        "id",
-        "created",
-        "start",
-        "last_reset",
-        "start_ts",
-        "created_ts",
-        "last_reset_ts"
-    ]
-
-    df.drop(
-        columns=[
-            c for c in drop_columns
-            if c in df.columns
-        ],
-        inplace=True
+    df = drop_columns(df, [
+            "id",
+            "created",
+            "start",
+            "last_reset",
+            "start_ts",
+            "created_ts",
+            "last_reset_ts"
+        ]
     )
 
     rows = len(df)
@@ -248,32 +245,6 @@ def import_parquet(file: Path):
                     f"Keine Meta-ID für statistic_id: {missing}"
                 )
 
-
-            drop_columns = [
-                "id",
-                "created",
-                "start",
-                "last_reset",
-
-                "created_ts",
-                "last_reset_ts",
-
-                # Diese Felder gehören zu statistics_meta
-                "source",
-                "unit_of_measurement",
-                "has_mean",
-                "has_sum",
-                "name",
-            ]
-
-            df.drop(
-                columns=[
-                    c for c in drop_columns
-                    if c in df.columns
-                ],
-                inplace=True
-            )
-
             df.to_sql(
                 "statistics_short_term",
                 conn,
@@ -285,13 +256,10 @@ def import_parquet(file: Path):
 
             conn.execute(
                 text("""
-                INSERT INTO import_history
-                (
+                INSERT INTO import_history (
                     filename,
                     rows_imported
-                )
-                VALUES
-                (
+                ) VALUES (
                     :filename,
                     :rows
                 )
