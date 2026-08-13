@@ -1,0 +1,12 @@
+.venv/
+**pycache**/
+*.py[cod]
+
+incoming/
+archive/
+logs/
+
+*.log
+
+.env
+*.env

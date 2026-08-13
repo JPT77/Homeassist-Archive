@@ -1,0 +1,30 @@
+#!/bin/sh
+
+set -eu
+
+BASE_DIR="/BASE_DIR/homeassist"
+APP_DIR="$HOME_DIR/Homeassist-Archive"
+VENV="$BASE_DIR/.venv/bin/python"
+LOG_DIR="$BASE_DIR/logs"
+ENV_FILE="$BASE_DIR/postgres-login.env"
+
+mkdir -p "$LOG_DIR"
+
+# default values
+export PG_USER="homeassist"
+export PG_HOST="localhost"
+export PG_PW="PASSWORD"
+
+# fetch actual values from env file
+if [ ! -f "$ENV_FILE" ]; then
+    echo "ERROR: Configuration file not found: $ENV_FILE" >&2
+    exit 1
+fi
+
+. "$ENV_FILE"
+
+cd "$BASE_DIR"
+
+LOG="$LOG_DIR/import-$(date '+%Y-%m-%d_%H-%M-%S').log"
+
+exec "$VENV" $APP_DIR/fetchhomeassist.py >> "$LOG" 2>&1
