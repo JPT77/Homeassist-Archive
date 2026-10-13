@@ -2,8 +2,9 @@
 
 set -eu
 
-BASE_DIR="/BASE_DIR/homeassist"
-APP_DIR="$HOME_DIR/Homeassist-Archive"
+HOME_DIR=/opt/homeassist
+BASE_DIR=$HOME_DIR
+APP_DIR="$BASE_DIR/Homeassist-Archive"
 VENV="$BASE_DIR/.venv/bin/python"
 LOG_DIR="$BASE_DIR/logs"
 ENV_FILE="$BASE_DIR/postgres-login.env"
