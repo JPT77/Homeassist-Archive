@@ -11,7 +11,7 @@ INCOMING_DIR="$BASE_DIR/incoming"
 ARCHIVE_DIR="$BASE_DIR/archive"
 SSH_DIR="$BASE_DIR/.ssh"
 SSH_KEY="$SSH_DIR/id_ed25519"
-CRON_FILE="/etc/cron.daily/homeassist-archive"
+CRON_FILE="/etc/cron.daily/homeassist-archive-wrapper"
 
 REPO_URL="https://github.com/JPT77/Homeassist-Archive.git"
 
@@ -132,13 +132,13 @@ fi
 
 echo "==> Installing daily cron job"
 
-if [[ ! -f "$APP_DIR/cron/homeassist-archive" ]]; then
+if [[ ! -f "$APP_DIR/cron/homeassist-archive-wrapper" ]]; then
     echo "ERROR: Cron file not found:"
-    echo "  $APP_DIR/cron/homeassist-archive"
+    echo "  $APP_DIR/cron/homeassist-archive-wrapper"
     exit 1
 fi
 
-install -o root -g root -m 0750 "$APP_DIR/cron/homeassist-archive" "$CRON_FILE"
+install -o root -g root -m 0750 "$APP_DIR/cron/homeassist-archive-wrapper" "$CRON_FILE"
 
 echo "==> Installation complete"
 echo

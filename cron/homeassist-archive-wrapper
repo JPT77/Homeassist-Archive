@@ -1,0 +1,2 @@
+#!/bin/sh
+exec runuser -u homeassist -- /bin/sh /opt/homeassist/Homeassist-Archive/cron/homeassist-archive
